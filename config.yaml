@@ -1,0 +1,88 @@
+project:
+  name: alchemist
+  version: "1.0.0"
+
+paths:
+  # Using relative paths from the root directory
+  raw_data: "data/raw"
+  processed_data: "data/processed"
+  feature_store: "data/feature_store"
+  models: "data/models"
+  mlflow_uri: "mlruns" # local MLflow tracking
+
+assets:
+  gold: "GLD"      # Gold ETF
+  silver: "SLV"    # Silver ETF
+  dollar: "UUP"    # Dollar ETF (DX-Y.NYB is unreliable on free APIs)
+
+fred_series:
+  DFII10: "real_yield"       # 10Y TIPS real yield
+  CPIAUCSL: "cpi_level"      # CPI index level
+  FEDFUNDS: "fed_funds"      # Fed Funds rate
+  VIXCLS: "vix"              # VIX
+  DTWEXBGS: "dollar_index"   # Trade-weighted dollar
+  HOUST: "housing_starts"    # Housing starts
+  T10Y2Y: "yield_curve"      # 10Y-2Y spread (recession signal)
+  BAMLH0A0HYM2: "hy_spread"  # High-yield credit spread (risk-off signal)
+
+fred_release_lags: # days after reference period before data is published
+  CPIAUCSL: 14
+  HOUST: 18
+  FEDFUNDS: 5
+  DFII10: 1
+  VIXCLS: 1
+  DTWEXBGS: 1
+  T10Y2Y: 1
+  BAMLH0A0HYM2: 1
+
+features:
+  lookback_windows: [5, 10, 20, 60] # days for rolling features
+  rsi_period: 14
+  atr_period: 14
+  regime_n_states: 3 # HMM states: bull / bear / high-vol
+
+labeling:
+  profit_target_pct: 0.02   # +2% upper barrier
+  stop_loss_pct: -0.01      # -1% lower barrier (asymmetric, note the negative sign)
+  horizon_days: 7           # vertical barrier
+  min_return_filter: 0.0003 # drop near-zero return days (low signal)
+
+model:
+  n_estimators: 800
+  learning_rate: 0.03
+  max_depth: 5
+  num_leaves: 31
+  min_child_samples: 50
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.1
+  reg_lambda: 1.0
+  class_weight: "balanced"
+  monotonic_constraints: []
+
+calibration:
+  method: "isotonic" # isotonic | sigmoid (platt)
+  cv_folds: 5
+
+backtest:
+  initial_capital: 100000
+  position_size_pct: 0.10
+  commission_pct: 0.001
+  slippage_pct: 0.0005
+  use_kelly: false
+
+walk_forward:
+  train_months: 24
+  test_months: 3
+  min_train_obs: 200
+
+mlflow:
+  experiment_name: "alchemist_gold_silver"
+  registered_model_name: "alchemist_lgbm"
+
+tavily:
+  search_depth: "advanced"
+  max_results: 5
+  query_templates:
+    gold: "gold price outlook macro {month} {year}"
+    silver: "silver price industrial demand outlook {month} {year}"

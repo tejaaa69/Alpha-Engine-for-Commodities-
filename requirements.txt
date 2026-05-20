@@ -1,0 +1,49 @@
+# Core data
+pandas>=2.1.0
+numpy>=1.26.0
+yfinance>=0.2.40
+fredapi>=0.5.1
+pyarrow>=14.0.0      # parquet engine
+requests>=2.31.0
+
+yfinance
+fredapi
+tavily-python
+
+# ML
+lightgbm>=4.3.0
+scikit-learn>=1.4.0
+hmmlearn>=0.3.0
+scipy>=1.12.0
+imbalanced-learn>=0.12.0   # for class imbalance handling
+
+vaderSentiment
+
+# Calibration + uncertainty
+mapie>=0.8.0               # conformal prediction / quantile
+
+# Explainability
+shap>=0.44.0
+
+# Tracking
+mlflow>=2.11.0
+
+# News / RAG
+tavily-python>=0.3.0
+chromadb>=0.5.0
+llama-index>=0.10.0
+sentence-transformers>=2.6.0
+
+# Backtest + metrics
+quantstats>=0.0.62
+
+# Dashboard
+streamlit>=1.32.0
+plotly>=5.19.0
+
+# Utilities
+pyyaml>=6.0.1
+python-dotenv>=1.0.1
+loguru>=0.7.2
+joblib>=1.3.0
+tqdm>=4.66.0

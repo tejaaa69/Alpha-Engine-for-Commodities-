@@ -1,0 +1,17 @@
+# Secrets
+.env
+
+# Virtual Environment
+venv/
+
+# Local Data and Databases (Avoid uploading heavy local data files)
+data/chroma_db/
+data/feature_store/
+data/processed/
+data/raw/
+
+# MLflow logs and artifacts
+mlruns/
+
+# Python caching
+**/__pycache__/
