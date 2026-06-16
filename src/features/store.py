@@ -18,7 +18,7 @@ from src.ingestion.market import MarketIngestion
 from src.ingestion.macro import MacroIngestion
 from src.ingestion.news import NewsIngestion
 
-# NEW IMPORTS: We need our labeling logic!
+#Labeling logic
 from src.models.labeling import get_volatility, triple_barrier_label, get_sample_uniqueness
 
 class FeatureStore:
@@ -58,7 +58,7 @@ class FeatureStore:
 
         logger.info(f"Building master feature store for {symbol}...")
 
-        # ── 1. Load price data ────────────────────────────────────────
+        # ── 1. Load price data 
         market = MarketIngestion(self.cfg)
         silver_symbol = self.cfg["assets"].get("silver", "SLV")
         gold_symbol = self.cfg["assets"].get("gold", "GLD")
@@ -66,7 +66,7 @@ class FeatureStore:
         price_df = market.load(symbol)
         silver_df = market.load(silver_symbol) if symbol != silver_symbol else price_df
 
-        # ── 2. Technical features ─────────────────────────────────────
+        # ── 2. Technical features 
         feat = build_technical_features(
             price_df,
             windows = self.windows,
@@ -74,16 +74,16 @@ class FeatureStore:
             atr_period = self.atr_period,
         )
 
-        # ── 3. Inter-asset features (only for gold) ───────────────────
+        # ── 3. Inter-asset features (only for gold) 
         if symbol == gold_symbol:
             feat = add_interasset_features(feat, silver_df)
 
-        # ── 4. Macro features ─────────────────────────────────────────
+        # ── 4. Macro features 
         macro_raw = MacroIngestion(self.cfg).load()
         macro_feats = MacroFeatures(macro_raw).align_to_daily(feat.index)
         feat = feat.join(macro_feats, how="left")
 
-        # ── 5. Regime features (FIXED VITERBI LEAKAGE) ────────────────
+        # ── 5. Regime features (fixed VITERBI LEAKAGE) 
         regime_path = self.model_dir / "regime_detector.pkl"
         if regime_path.exists():
             detector = RegimeDetector.load(regime_path)
@@ -92,19 +92,18 @@ class FeatureStore:
             detector.fit(price_df["close"])
             detector.save(regime_path)
 
-        # CRITICAL FIX: Use get_historical_features, not predict()
+        # get_historical_features, not predict()
         regime_df = detector.get_historical_features(price_df["close"])
         feat = feat.join(regime_df, how="left")
 
-        # ── 6. News sentiment features ────────────────────────────────
+        # ── 6. News sentiment features 
         news_ingestion = NewsIngestion(self.cfg)
         news_df = news_ingestion.load()
         if not news_df.empty:
-            # Forward-fill weekly sentiment onto daily index
             news_aligned = news_df.reindex(feat.index, method="ffill")
             feat = feat.join(news_aligned, how="left")
 
-        # ── 7. Triple Barrier Labels (NEW) ────────────────────────────
+        # ── 7. Triple Barrier Labels 
         logger.info("Generating Triple Barrier Targets...")
         volatility = get_volatility(price_df["close"], span=100)
         
@@ -126,14 +125,79 @@ class FeatureStore:
         # Join targets to the feature matrix
         feat = feat.join(labels_df[["label", "ret", "barrier", "sample_weight"]], how="inner")
 
-        # ── 8. Cleanup & Save (FIXED PLACE FOR ALL MATH SAFETY) ───────
+        # ── 8. Cleanup & Save 
         cols_to_drop = ["open", "high", "low", "close", "volume", "symbol"]
         feat = feat.drop(columns=[c for c in cols_to_drop if c in feat.columns])
         
-        # Drop NaN rows at the start (from rolling window warmup)
-        feat = feat.dropna(subset=["ma_60", "label"])
+        # Drop NaN rows at the start (from rolling window warmup) and ensure labels are present.
+        # Use the longest MA column so the drop logic survives changes to lookback_windows.
+        ma_col = f"ma_{max(self.windows)}" if self.windows else "ma_60"
+        if ma_col in feat.columns:
+            feat = feat.dropna(subset=[ma_col])
+        feat = feat.dropna(subset=["label"])   # remove rows where label wasn’t computable (tail)
+        
         feat.to_parquet(path)
         logger.success(f"Feature store built: {len(feat)} rows × {len(feat.columns)} cols → {path}")
+        return feat
+    
+    def build_inference(self, symbol: str) -> pd.DataFrame:
+        """
+        Build feature matrix for live inference - includes the latest unlabeled rows.
+        Does NOT join labels, so the most recent date is today (or the latest available).
+        """
+        logger.info(f"Building inference feature store for {symbol}...")
+
+        market = MarketIngestion(self.cfg)
+        silver_symbol = self.cfg["assets"].get("silver", "SLV")
+        gold_symbol = self.cfg["assets"].get("gold", "GLD")
+
+        price_df = market.load(symbol)
+        silver_df = market.load(silver_symbol) if symbol != silver_symbol else price_df
+
+        feat = build_technical_features(
+            price_df,
+            windows=self.windows,
+            rsi_period=self.rsi_period,
+            atr_period=self.atr_period,
+        )
+        if symbol == gold_symbol:
+            feat = add_interasset_features(feat, silver_df)
+
+        macro_raw = MacroIngestion(self.cfg).load()
+        macro_feats = MacroFeatures(macro_raw).align_to_daily(feat.index)
+        feat = feat.join(macro_feats, how="left")
+
+        # Regime features
+        regime_path = self.model_dir / "regime_detector.pkl"
+        if regime_path.exists():
+            detector = RegimeDetector.load(regime_path)
+        else:
+            detector = RegimeDetector(n_states=self.cfg["features"]["regime_n_states"])
+            detector.fit(price_df["close"])
+            detector.save(regime_path)
+        regime_df = detector.get_historical_features(price_df["close"])
+        feat = feat.join(regime_df, how="left")
+
+        # News sentiment
+        news_ingestion = NewsIngestion(self.cfg)
+        news_df = news_ingestion.load()
+        if not news_df.empty:
+            news_aligned = news_df.reindex(feat.index, method="ffill")
+            feat = feat.join(news_aligned, how="left")
+
+        # Drop raw OHLCV columns
+        cols_to_drop = ["open", "high", "low", "close", "volume", "symbol"]
+        feat = feat.drop(columns=[c for c in cols_to_drop if c in feat.columns])
+
+        # Remove rows where the longest moving average hasn't yet been computed (warmup)
+        ma_col = f"ma_{max(self.windows)}" if self.windows else "ma_60"
+        if ma_col in feat.columns:
+            feat = feat.dropna(subset=[ma_col])
+
+        # Fill any remaining gaps (e.g., shorter windows, macro series)
+        feat = feat.ffill().fillna(0)
+
+        logger.success(f"Inference feature store built: {len(feat)} rows × {len(feat.columns)} cols")
         return feat
 
     def get_feature_columns(self, symbol: str) -> list:
@@ -143,9 +207,7 @@ class FeatureStore:
         return [c for c in df.columns if c not in exclude]
 
     def get_monotonic_constraints(self, feature_cols: list) -> list:
-        """
-        Returns constraint vector for LightGBM monotonic_constraints.
-        """
+        """Returns constraint vector for LightGBM monotonic_constraints."""
         constraints = {
             "real_yield": -1,
             "real_yield_zscore": -1,

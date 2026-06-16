@@ -15,14 +15,12 @@ from loguru import logger
 
 
 def _load_cfg() -> dict:
-    # Safely load from root directory
     from pathlib import Path
     root = Path(__file__).resolve().parent.parent.parent
     with open(root / "config.yaml") as f:
         return yaml.safe_load(f)
 
 # TOOL 1: Alchemist ML Prediction (Bridge)
-
 @tool
 def alchemist_prediction_tool(symbol: str) -> str:
     """
@@ -39,19 +37,18 @@ def alchemist_prediction_tool(symbol: str) -> str:
         from src.explainability.shap_engine import SHAPExplainer
 
         cfg = _load_cfg()
-        tracker = AlchemistTracker(cfg)
 
-        # 1. Load Model strictly from MLOps Registry
+        # ── Symbol‑aware tracker and model loading ─────────────────
+        tracker = AlchemistTracker(cfg, symbol=symbol)
         model = tracker.load_production_model()
         if not model:
             return f"Error: No Production/Staging model found in MLflow Registry for {symbol}."
 
-        # 2. Get Live Features (force_rebuild=False assumes daily cron job updates data)
+        # ── Live inference features ────────────────────────────────
         store = FeatureStore(cfg)
-        features_df = store.build(symbol, force_rebuild=False)
+        features_df = store.build_inference(symbol)
         feature_cols = model.feature_cols
-        
-        # Guard against missing columns
+
         missing = [c for c in feature_cols if c not in features_df.columns]
         if missing:
             return f"Error: Feature store missing required columns: {missing[:3]}..."
@@ -59,47 +56,57 @@ def alchemist_prediction_tool(symbol: str) -> str:
         latest_features = features_df[feature_cols].iloc[[-1]]
         latest_date = features_df.index[-1]
 
-        # 3. Live Inference
-        prob = float(model.predict_proba(latest_features)[0, 1])
+        # ── Robust probability extraction ──────────────────────────
+        raw_prob = model.predict_proba(latest_features)
+        try:
+            prob = float(raw_prob[0, 1])      # standard (1, 2) array
+        except (IndexError, TypeError):
+            try:
+                prob = float(raw_prob[0])     # 1D array / Series
+            except (IndexError, TypeError):
+                prob = float(raw_prob)        # scalar
+
         signal = "BUY SIGNAL (+2% TARGET EXPECTED)" if prob >= 0.55 else "FLAT / NO SIGNAL"
 
-        # 4. Extract Regime
+        # ── Regime ─────────────────────────────────────────────────
         regime = "UNKNOWN"
-        regime_prob = 0.0
-        # Check dummy columns to infer regime
-        for col in latest_features.columns:
-            if col.startswith("prob_") and "VOL" in col:
-                val = float(latest_features[col].iloc[-1])
-                if val > regime_prob:
-                    regime_prob = val
-                    regime = col.replace("prob_", "")
+        if "regime_code" in features_df.columns:
+            code = int(features_df["regime_code"].iloc[-1])
+            regime_map = {
+                0: "LOW_VOL (Bull)",
+                1: "MID_VOL (Transition)",
+                2: "HIGH_VOL (Crisis/Bear)",
+            }
+            regime = regime_map.get(code, "UNKNOWN")
 
-        # 5. Dynamic Local SHAP Generation
+        # ── SHAP ───────────────────────────────────────────────────
         logger.info("[TOOL: ALCHEMIST ML] Generating Live SHAP narrative...")
-        background = features_df[feature_cols].tail(100) # Fast baseline
+        background = features_df[feature_cols].tail(100).fillna(0)
         explainer = SHAPExplainer(model.model, feature_cols)
         explainer.fit(background)
         explainer.compute(latest_features)
         shap_narrative = explainer.get_prediction_narrative(0)
 
-        # 6. Fetch Backtest Stats from MLflow Run
+        # ── Backtest stats from the same run ──────────────────────
         client = mlflow.MlflowClient()
         bt_sharpe, bt_win_rate = "N/A", "N/A"
-        
-        versions = client.get_latest_versions(cfg["mlflow"]["registered_model_name"], stages=["Production", "Staging"])
+
+        versions = client.get_latest_versions(
+            tracker.model_name, stages=["Production", "Staging"]
+        )
         if versions:
             run_id = versions[0].run_id
             run_data = client.get_run(run_id).data.metrics
             bt_sharpe = f"{run_data.get('bt_sharpe_ratio', 0):.2f}"
             bt_win_rate = f"{run_data.get('bt_win_rate', 0):.1%}"
 
-        # 7. Construct Final LLM Payload
+        # ── Final output ───────────────────────────────────────────
         output = (
-            f"ALCHEMIST QUANT ENGINE SIGNAL | Asset: {symbol} | Date: {latest_date.date()}\n"
+            f"ALCHEMIST QUANT ENGINE SIGNAL | Asset: {symbol} | Date: {latest_date.strftime('%Y-%m-%d')}\n"
             f"--------------------------------------------------\n"
             f"Probability (+2% Target): {prob:.1%}\n"
             f"Actionable Signal:        {signal}\n"
-            f"Current Market Regime:    {regime} ({regime_prob:.0%} confidence)\n\n"
+            f"Current Market Regime:    {regime}\n\n"
             f"Mathematical Drivers (SHAP):\n{shap_narrative}\n\n"
             f"Model Historical Stats (Out of Sample):\n"
             f"Sharpe Ratio: {bt_sharpe} | Win Rate: {bt_win_rate}\n"
@@ -111,7 +118,6 @@ def alchemist_prediction_tool(symbol: str) -> str:
     except Exception as e:
         logger.error(f"[ALCHEMIST ML] Failed: {e}")
         return f"AlchemistPredictionTool encountered a critical error: {type(e).__name__}: {e}"
-
 
 # TOOL 2: RAG Document Search
 

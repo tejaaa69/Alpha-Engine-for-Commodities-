@@ -25,11 +25,19 @@ from src.models.lgbm_model import AlchemistModel
 
 
 class AlchemistTracker:
-    def __init__(self, cfg: Dict[str, Any]):
-        
+    def __init__(self, cfg: Dict[str, Any], symbol: str = "GLD"):
         self.cfg         = cfg
         self.exp_name    = cfg["mlflow"]["experiment_name"]
-        self.model_name  = cfg["mlflow"]["registered_model_name"]
+        
+        # Pull the naming template from config, fallback gracefully if it doesn't exist
+        template = cfg["mlflow"].get("registered_model_name_template", cfg["mlflow"]["registered_model_name"])
+        
+        # Dynamically inject the active asset symbol (e.g. alchemist_lgbm_GLD)
+        if "{symbol}" in template:
+            self.model_name = template.format(symbol=symbol)
+        else:
+            self.model_name = f"{template}_{symbol}"
+        self.symbol      = symbol
         
         # Resolve tracking URI to an absolute path to prevent folder scattering
         root_dir = Path(__file__).resolve().parent.parent.parent

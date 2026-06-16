@@ -79,6 +79,7 @@ walk_forward:
 mlflow:
   experiment_name: "alchemist_gold_silver"
   registered_model_name: "alchemist_lgbm"
+  registered_model_name_template: "alchemist_lgbm_{symbol}"
 
 tavily:
   search_depth: "advanced"
