@@ -7,6 +7,7 @@ Unified state for the merged Alchemist + CIE agent.
 import operator
 from typing import Annotated, Optional, TypedDict
 from langgraph.graph.message import add_messages
+from sympy import Float
 
 class MLPrediction(TypedDict):
     symbol:          str
@@ -15,8 +16,10 @@ class MLPrediction(TypedDict):
     signal:          str            # BUY / NO_SIGNAL
     regime:          str            # BULL / BEAR / SIDEWAYS
     shap_narrative:  str            # Top drivers as text
-    bt_sharpe:       str            # Model's historical Sharpe
-    bt_win_rate:     str            # Model's historical Win Rate
+    bt_sharpe:       Float            # Model's historical Sharpe
+    bt_win_rate:     Float            # Model's historical Win Rate
+    regime_prob:     float          # P(regime) from regime classifier
+    confidence_pct:  int           # Confidence in the prediction (0-100)
 
 class ResearchState(TypedDict):
     # Core Conversational Memory (Mandatory for LangGraph)

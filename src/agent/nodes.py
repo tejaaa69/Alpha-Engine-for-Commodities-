@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 from src.agent.state import ResearchState, MLPrediction
 from src.agent.tools import TOOL_MAP
 
-
 # LLM — shared across nodes
 
 def _get_llm():
@@ -28,7 +27,6 @@ def _get_llm():
         temperature = 0, # Strict, deterministic reasoning
         api_key     = os.environ.get("GROQ_API_KEY", ""),
     )
-
 
 # ROUTER NODE
 

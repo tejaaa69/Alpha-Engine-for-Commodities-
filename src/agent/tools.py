@@ -32,19 +32,34 @@ def alchemist_prediction_tool(symbol: str) -> str:
     logger.info(f"[TOOL: ALCHEMIST ML] Running live prediction for {symbol}")
     try:
         import mlflow
+        from pathlib import Path
+        import joblib
         from src.features.store import FeatureStore
         from src.tracking.mlflow_utils import AlchemistTracker
         from src.explainability.shap_engine import SHAPExplainer
 
         cfg = _load_cfg()
 
-        # ── Symbol‑aware tracker and model loading ─────────────────
+        # ── Symbol‑aware tracker and model loading
         tracker = AlchemistTracker(cfg, symbol=symbol)
         model = tracker.load_production_model()
-        if not model:
-            return f"Error: No Production/Staging model found in MLflow Registry for {symbol}."
 
-        # ── Live inference features ────────────────────────────────
+        # ── LOCAL FALLBACK (same as dashboard)
+        if model is None:
+            local_path = Path(f"data/models/alchemist_model_{symbol}.joblib")
+            if not local_path.exists():
+                local_path = Path("data/models/alchemist_model.joblib")
+            if local_path.exists():
+                try:
+                    model = joblib.load(local_path)
+                    logger.info(f"✅ Loaded model from local backup for {symbol}")
+                except Exception:
+                    pass
+
+        if not model:
+            return f"Error: No Production/Staging model found in MLflow Registry or local backup for {symbol}."
+
+        # ── Live inference features
         store = FeatureStore(cfg)
         features_df = store.build_inference(symbol)
         feature_cols = model.feature_cols
@@ -56,7 +71,7 @@ def alchemist_prediction_tool(symbol: str) -> str:
         latest_features = features_df[feature_cols].iloc[[-1]]
         latest_date = features_df.index[-1]
 
-        # ── Robust probability extraction ──────────────────────────
+        # ── Robust probability extraction
         raw_prob = model.predict_proba(latest_features)
         try:
             prob = float(raw_prob[0, 1])      # standard (1, 2) array
@@ -68,7 +83,7 @@ def alchemist_prediction_tool(symbol: str) -> str:
 
         signal = "BUY SIGNAL (+2% TARGET EXPECTED)" if prob >= 0.55 else "FLAT / NO SIGNAL"
 
-        # ── Regime ─────────────────────────────────────────────────
+        # ── Regime
         regime = "UNKNOWN"
         if "regime_code" in features_df.columns:
             code = int(features_df["regime_code"].iloc[-1])
@@ -79,7 +94,7 @@ def alchemist_prediction_tool(symbol: str) -> str:
             }
             regime = regime_map.get(code, "UNKNOWN")
 
-        # ── SHAP ───────────────────────────────────────────────────
+        # ── SHAP
         logger.info("[TOOL: ALCHEMIST ML] Generating Live SHAP narrative...")
         background = features_df[feature_cols].tail(100).fillna(0)
         explainer = SHAPExplainer(model.model, feature_cols)
@@ -87,7 +102,7 @@ def alchemist_prediction_tool(symbol: str) -> str:
         explainer.compute(latest_features)
         shap_narrative = explainer.get_prediction_narrative(0)
 
-        # ── Backtest stats from the same run ──────────────────────
+        # ── Backtest stats from the same run 
         client = mlflow.MlflowClient()
         bt_sharpe, bt_win_rate = "N/A", "N/A"
 
@@ -100,7 +115,7 @@ def alchemist_prediction_tool(symbol: str) -> str:
             bt_sharpe = f"{run_data.get('bt_sharpe_ratio', 0):.2f}"
             bt_win_rate = f"{run_data.get('bt_win_rate', 0):.1%}"
 
-        # ── Final output ───────────────────────────────────────────
+        # ── Final output
         output = (
             f"ALCHEMIST QUANT ENGINE SIGNAL | Asset: {symbol} | Date: {latest_date.strftime('%Y-%m-%d')}\n"
             f"--------------------------------------------------\n"
@@ -176,7 +191,6 @@ def tavily_search_tool(query: str) -> str:
         return f"Live Web Data for '{query}':\n{results}"
     except Exception as e:
         return f"Tavily search failed: {e}"
-
 
 # TOOL 4: FRED Live Data
 

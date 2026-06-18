@@ -1,10 +1,10 @@
 """
-dashboard/app.py
+dashboard/application.py
 
 Unified Alchemist Dashboard - Corrected Live Inference Version.
 Interfaces with MLflow Model Registry and LangGraph Agent.
 
-Run: streamlit run dashboard/app.py
+Run: streamlit run dashboard/application.py
 """
 
 import sys
@@ -272,14 +272,31 @@ def tab_agent(symbol):
 
 #Main
 def main():
+    from pathlib import Path
+    import joblib
+
     cfg = load_config()
     symbol, threshold = render_sidebar(cfg)
     st.title(f"⚗️ Alchemist — {symbol} Intelligence Engine")
 
-    # Load model and data (model may be None)
+    # ── Load model: MLflow first, then local file 
     tracker = get_tracker(cfg, symbol)
     model = load_prod_model(tracker)
 
+    if model is None:
+        # Asset‑specific fallback (e.g. alchemist_model_GLD.joblib)
+        local_model_path = Path(f"data/models/alchemist_model_{symbol}.joblib")
+        if not local_model_path.exists():
+            local_model_path = Path("data/models/alchemist_model.joblib")
+
+        if local_model_path.exists():
+            try:
+                model = joblib.load(local_model_path)
+                st.success(f"✅ Loaded model from local backup for {symbol}.")
+            except Exception as e:
+                st.warning(f"Local backup recovery failed: {e}")
+
+    # ── Load data ─────────────────────────────────────────────────
     with st.spinner("Synchronizing Engine Systems…"):
         try:
             price_df = load_price(cfg, symbol)
@@ -288,24 +305,23 @@ def main():
             st.error(f"❌ Critical data sync failure: {e}")
             return
 
-    # ── CENTRALISED CHECK for missing model
+    # ── Centralised model‑missing check
     if model is None:
         st.warning(
-            f"⚠️ **No Production Model Found for {symbol} in the MLflow Registry.**\n\n"
+            f"⚠️ **No Production Model Found for {symbol} in the MLflow Registry or Local Storage.**\n\n"
             f"Real‑time signals, backtests, and SHAP drivers are unavailable "
             f"until a model is trained and promoted to **Production**.\n\n"
             f"👉 **Run the training pipeline from your terminal:**"
         )
         st.code(f"python main.py --mode train --symbol {symbol}", language="bash")
         st.divider()
-        # Only the Agent tab is shown – it can still answer using RAG, web search, and FRED.
         tab_agent(symbol)
         return
 
-    # ── Full dashboard layout when model is available 
-    t1, t2, t3, t4 = st.tabs(
-        ["📡 Live Signal", "📈 Backtest OOS", "🌊 Regime Monitor", "🤖 Research Agent"]
-    )
+    # Full dashboard layout
+    t1, t2, t3, t4 = st.tabs([
+        "📡 Live Signal", "📈 Backtest OOS", "🌊 Regime Monitor", "🤖 Research Agent"
+    ])
     with t1:
         tab_live_signal(cfg, symbol, threshold, model, inference_df, price_df)
     with t2:
